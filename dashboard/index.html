@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ZDC Systems</title>
+    <script>
+      // Тема до первой отрисовки (без вспышки): сохранённый выбор, иначе системная.
+      // Дальше атрибутом управляет src/theme.ts. Ключ — тот же, что в theme.ts.
+      ;(function () {
+        var t = null
+        try {
+          t = localStorage.getItem('zdc.theme')
+        } catch (e) {}
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        document.documentElement.dataset.theme = t
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-mkj8h4f2.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Dd9BfE9_.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
