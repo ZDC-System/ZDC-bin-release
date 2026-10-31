@@ -461,3 +461,44 @@ install_license() {
   info "лицензия подключена → $LICENSE_FILE"
 }
 
+
+# --- Запуск без лицензии ------------------------------------------------------
+# Простые токены входа для запуска без лицензии (API_TOKEN — дашборд,
+# WORKER_TOKEN — воркер), права 600. Генерируются start.sh при первом запуске.
+TOKENS_FILE="$DATA_DIR/tokens.env"
+
+# Сборка сервера с встроенным ключом издателя: в ней нет кода простых токенов
+# (и строки API_TOKEN в бинарнике) — без лицензии она не пустит воркер.
+server_is_licensed_build() {
+  ! grep -aq 'API_TOKEN' "$BIN_DIR/analitics_service"
+}
+
+# Лицензия подключена: в файле есть оба ключа.
+license_present() {
+  [ -n "$(license_key WORKER)" ] && [ -n "$(license_key USER)" ]
+}
+
+# Токен из файла токенов: token_value API_TOKEN|WORKER_TOKEN. Файл не исполняется.
+token_value() {
+  [ -f "$TOKENS_FILE" ] || return 0
+  grep -E "^$1=[0-9a-f]{64}$" "$TOKENS_FILE" | head -n1 | cut -d= -f2-
+}
+
+# Создать файл токенов, если его нет или он испорчен (значения — 32 байта hex).
+ensure_tokens() {
+  if [ -n "$(token_value API_TOKEN)" ] && [ -n "$(token_value WORKER_TOKEN)" ]; then
+    return 0
+  fi
+  mkdir -p "$DATA_DIR"
+  (
+    umask 077
+    {
+      echo "# Токены входа ZDC Systems без лицензии — сгенерированы $(date -u +%FT%TZ)."
+      echo "# API_TOKEN — вход в дашборд, WORKER_TOKEN — воркер. Не публиковать."
+      echo "API_TOKEN=$(gen_hex 32)"
+      echo "WORKER_TOKEN=$(gen_hex 32)"
+    } >"$TOKENS_FILE"
+  )
+  chmod 600 "$TOKENS_FILE"
+  info "сгенерированы токены входа → $TOKENS_FILE"
+}

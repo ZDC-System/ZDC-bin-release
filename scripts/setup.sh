@@ -7,8 +7,9 @@
 #   3. проверяет бинарники из bin/ (на месте, запускаются, хватает библиотек);
 #   4. поднимает PostgreSQL, создаёт роль и базу;
 #   5. генерирует deploy_scripts/zdc.env — пароль БД, SECRETS_KEY и адреса.
-#      Токенов API здесь больше нет: вход — по лицензионному ключу из файла
-#      лицензии, который выдаёт издатель (см. --license / start.sh license);
+#      Вход — по лицензионному ключу из файла лицензии издателя (--license /
+#      start.sh license); без лицензии (сборка без встроенного ключа) start.sh
+#      сам сгенерирует простые токены в .zdc-data/tokens.env;
 #   6. по желанию подключает лицензию и ставит внешние анализаторы ревью.
 #
 # Запуск:  ./scripts/setup.sh [--license <файл .lic>]   (нужен sudo/root для пакетов)
@@ -70,7 +71,8 @@ main() {
     cat >"$ENV_FILE" <<EOF
 # Значения ZDC Systems — сгенерированы setup.sh $(date -u +%FT%TZ).
 # Содержит секреты (пароль БД, SECRETS_KEY): не коммитить, доступ 600.
-# Ключи входа — не здесь, а в файле лицензии ($LICENSE_FILE).
+# Ключи входа — в файле лицензии ($LICENSE_FILE); без лицензии — токены
+# в $TOKENS_FILE (start.sh создаёт сам) или свои ниже.
 export DATABASE_URL="postgres://${DB_ROLE}:${db_pass}@127.0.0.1:5432/${DB_NAME}"
 export BIND_ADDR="127.0.0.1:8080"
 export SECRETS_KEY="${secrets_key}"
@@ -87,6 +89,13 @@ export PENTEST_HOST_PORT="18080"
 # Разрешённые корни локальных целей отчётов (через \`:\`); \`none\` — запретить
 # локальные пути. Не задано — любой каталог хоста (воркер предупредит).
 # export ZDC_SOURCE_ROOTS="/srv/repos"
+# Запуск без лицензии (только сборка без встроенного ключа издателя): свои
+# токены (≥16 символов, разные); не заданы — start.sh сгенерирует свои.
+# export API_TOKEN="..."
+# export WORKER_TOKEN="..."
+# Демо-режим (кнопка «Демо-режим» на экране активации) включён по умолчанию;
+# выключить:
+# export DEMO_MODE=0
 # Отозванные номера лицензий (через запятую) — отказ без связи с издателем.
 # export LICENSE_REVOKED=""
 EOF
@@ -106,8 +115,10 @@ EOF
     install_license "$license"
   elif [ -f "$LICENSE_FILE" ]; then
     info "лицензия уже подключена: $LICENSE_FILE"
+  elif server_is_licensed_build; then
+    warn "лицензия не подключена — эта сборка без неё не запустится: ./scripts/start.sh license <файл .lic>"
   else
-    warn "лицензия не подключена — до запуска выполните: ./scripts/start.sh license <файл .lic>"
+    info "лицензия не подключена — запуск без лицензии: start.sh сгенерирует токены в $TOKENS_FILE"
   fi
 
   # 7. Внешние анализаторы ревью (best-effort; ZDC_SKIP_ANALYZERS=1 — пропустить).
@@ -119,7 +130,7 @@ EOF
 
   info "== Готово =="
   info "Запуск:   ./scripts/start.sh"
-  info "Дашборд:  http://${DASHBOARD_BIND:-127.0.0.1:5173}  (вход — ключ ZDC_LICENSE_USER из файла лицензии)"
+  info "Дашборд:  http://${DASHBOARD_BIND:-127.0.0.1:5173}  (вход — ключ ZDC_LICENSE_USER из файла лицензии, без лицензии — API_TOKEN из $TOKENS_FILE)"
   if ! have docker; then warn "docker не установлен — активное тестирование (pentest) будет недоступно"; fi
   if ! have nuclei; then warn "nuclei не установлен — активный скан пентеста недоступен (релиз projectdiscovery/nuclei)"; fi
   if ! have gitleaks; then warn "gitleaks не установлен — поиск секретов в ревью будет пропускаться"; fi

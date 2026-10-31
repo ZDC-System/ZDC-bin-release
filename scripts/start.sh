@@ -3,7 +3,7 @@
 # дашборд) и воркер. Сборка (cargo/npm) не нужна.
 #
 # Использование:
-#   ./scripts/start.sh                    # запустить всё (сначала setup.sh и лицензия)
+#   ./scripts/start.sh                    # запустить всё (сначала setup.sh)
 #   ./scripts/start.sh license <файл>     # подключить/заменить файл лицензии
 #   ./scripts/start.sh status             # состояние и срок лицензии
 #   ./scripts/start.sh stop               # остановить всё
@@ -12,6 +12,9 @@
 # Значения — из scripts/zdc.env (создаёт setup.sh), ключи входа — из файла
 # лицензии .zdc-data/license.lic: ZDC_LICENSE_WORKER уходит воркеру (и серверу —
 # для воркеров, запускаемых из дашборда), ZDC_LICENSE_USER — вход в дашборд.
+# Без лицензии (только сборка без встроенного ключа издателя) — простые токены:
+# API_TOKEN/WORKER_TOKEN из zdc.env или сгенерированные в .zdc-data/tokens.env
+# (API_TOKEN — вход в дашборд).
 # Логи — в .zdc-data/logs/, pid-файлы — в .zdc-data/run/.
 
 set -euo pipefail
@@ -90,24 +93,40 @@ stop_svc() {
   rm -f "$pf"
 }
 
-# Ключи из файла лицензии → окружение сервера и воркера.
-load_license() {
-  local worker_key
-  worker_key="$(license_key WORKER)"
-  [ -n "$worker_key" ] && [ -n "$(license_key USER)" ] ||
-    die "лицензия не подключена: ./scripts/start.sh license <файл .lic> (файл выдаёт издатель)"
-  local out
-  out="$(check_license_file "$LICENSE_FILE" 2>&1)" ||
-    die "лицензия недействительна: $(echo "$out" | grep -m1 'НЕ действительна' || echo "$out")"
-  # Ключ воркера — токен воркера; простые токены прежних версий не нужны.
-  export WORKER_TOKEN="$worker_key"
-  unset API_TOKEN
+# Способ входа → окружение сервера и воркера; LOGIN_HINT — что вводить в дашборде.
+#  1. Подключена лицензия — её ключи (ZDC_LICENSE_WORKER → WORKER_TOKEN).
+#  2. Без лицензии (только сборка без встроенного ключа издателя):
+#     API_TOKEN/WORKER_TOKEN из zdc.env, иначе — сгенерированные в $TOKENS_FILE.
+load_auth() {
+  if license_present; then
+    local out
+    out="$(check_license_file "$LICENSE_FILE" 2>&1)" ||
+      die "лицензия недействительна: $(echo "$out" | grep -m1 'НЕ действительна' || echo "$out")"
+    # Ключ воркера — токен воркера; простые токены не нужны.
+    export WORKER_TOKEN="$(license_key WORKER)"
+    unset API_TOKEN
+    LOGIN_HINT="ключ ZDC_LICENSE_USER из $LICENSE_FILE"
+    return 0
+  fi
+  if server_is_licensed_build; then
+    die "эта сборка работает только с лицензией: ./scripts/start.sh license <файл .lic> (файл выдаёт издатель)"
+  fi
+  warn "лицензия не подключена — запуск без лицензии"
+  if [ -n "${API_TOKEN:-}" ] && [ -n "${WORKER_TOKEN:-}" ]; then
+    LOGIN_HINT="API_TOKEN из $ENV_FILE"
+    return 0
+  fi
+  ensure_tokens
+  export API_TOKEN WORKER_TOKEN
+  API_TOKEN="$(token_value API_TOKEN)"
+  WORKER_TOKEN="$(token_value WORKER_TOKEN)"
+  LOGIN_HINT="API_TOKEN из $TOKENS_FILE"
 }
 
 do_start() {
   load_env
   check_binaries
-  load_license
+  load_auth
   # Внешняя БД (DATABASE_URL на другой машине) — локальную службу не трогаем.
   if [ "${ZDC_EXTERNAL_DB:-0}" != 1 ]; then
     detect_distro >/dev/null
@@ -135,7 +154,7 @@ do_start() {
   start_svc worker "$DATA_DIR" "$BIN_DIR/report_worker"
 
   info "== Запущено =="
-  info "Дашборд: http://$DASHBOARD_BIND  (вход — ключ ZDC_LICENSE_USER из $LICENSE_FILE)"
+  info "Дашборд: http://$DASHBOARD_BIND  (вход — $LOGIN_HINT)"
   info "Логи:    $LOG_DIR/{server,worker}.log"
   info "Статус:  ./scripts/start.sh status    Остановить: ./scripts/start.sh stop"
 }
@@ -166,8 +185,10 @@ do_status() {
   fi
   if [ -f "$LICENSE_FILE" ]; then
     check_license_file "$LICENSE_FILE" | sed 's/^/  /' || true
+  elif [ -x "$BIN_DIR/analitics_service" ] && server_is_licensed_build; then
+    printf '  %-10s не подключена (эта сборка без лицензии не запустится)\n' "лицензия"
   else
-    printf '  %-10s не подключена\n' "лицензия"
+    printf '  %-10s не подключена — вход по токенам (%s)\n' "лицензия" "$TOKENS_FILE"
   fi
 }
 
