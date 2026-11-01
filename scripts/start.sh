@@ -12,9 +12,7 @@
 # Значения — из scripts/zdc.env (создаёт setup.sh), ключи входа — из файла
 # лицензии .zdc-data/license.lic: ZDC_LICENSE_WORKER уходит воркеру (и серверу —
 # для воркеров, запускаемых из дашборда), ZDC_LICENSE_USER — вход в дашборд.
-# Без лицензии (только сборка без встроенного ключа издателя) — простые токены:
-# API_TOKEN/WORKER_TOKEN из zdc.env или сгенерированные в .zdc-data/tokens.env
-# (API_TOKEN — вход в дашборд).
+# Без файла лицензии не запускается — других способов входа нет.
 # Логи — в .zdc-data/logs/, pid-файлы — в .zdc-data/run/.
 
 set -euo pipefail
@@ -94,33 +92,32 @@ stop_svc() {
 }
 
 # Способ входа → окружение сервера и воркера; LOGIN_HINT — что вводить в дашборде.
-#  1. Подключена лицензия — её ключи (ZDC_LICENSE_WORKER → WORKER_TOKEN).
-#  2. Без лицензии (только сборка без встроенного ключа издателя):
-#     API_TOKEN/WORKER_TOKEN из zdc.env, иначе — сгенерированные в $TOKENS_FILE.
+#  1. Подключена лицензия — её ключи (ZDC_LICENSE_WORKER → ZDC_WORKER_KEY),
+#     вход в дашборд по ZDC_LICENSE_USER.
+#  2. Без лицензии — демо-режим: вход кнопкой «Демо-режим»; воркеру нужен лишь
+#     локальный ключ ZDC_WORKER_KEY (из zdc.env или сгенерированный в $KEYS_FILE).
+#     Сборка остаётся лицензионной (встроенный ключ издателя) — сервер стартует.
 load_auth() {
   if license_present; then
     local out
     out="$(check_license_file "$LICENSE_FILE" 2>&1)" ||
       die "лицензия недействительна: $(echo "$out" | grep -m1 'НЕ действительна' || echo "$out")"
-    # Ключ воркера — токен воркера; простые токены не нужны.
-    export WORKER_TOKEN="$(license_key WORKER)"
-    unset API_TOKEN
+    # Ключ воркера из лицензии; ключ входа сервер берёт из самой лицензии.
+    export ZDC_WORKER_KEY="$(license_key WORKER)"
     LOGIN_HINT="ключ ZDC_LICENSE_USER из $LICENSE_FILE"
     return 0
   fi
-  if server_is_licensed_build; then
-    die "эта сборка работает только с лицензией: ./scripts/start.sh license <файл .lic> (файл выдаёт издатель)"
+  if [ -n "${API_TOKEN:-}${WORKER_TOKEN:-}" ]; then
+    die "API_TOKEN/WORKER_TOKEN больше не используются: пользователь входит по лицензии или в демо-режиме, ключ воркера — ZDC_WORKER_KEY"
   fi
-  warn "лицензия не подключена — запуск без лицензии"
-  if [ -n "${API_TOKEN:-}" ] && [ -n "${WORKER_TOKEN:-}" ]; then
-    LOGIN_HINT="API_TOKEN из $ENV_FILE"
-    return 0
+  # Без лицензии: воркеру нужен локальный ключ (вход пользователя — демо-режим).
+  if [ -z "${ZDC_WORKER_KEY:-}" ]; then
+    ensure_worker_key
+    ZDC_WORKER_KEY="$(worker_key_value)"
   fi
-  ensure_tokens
-  export API_TOKEN WORKER_TOKEN
-  API_TOKEN="$(token_value API_TOKEN)"
-  WORKER_TOKEN="$(token_value WORKER_TOKEN)"
-  LOGIN_HINT="API_TOKEN из $TOKENS_FILE"
+  export ZDC_WORKER_KEY
+  warn "лицензия не подключена — дашборд работает в демо-режиме (если не выключен DEMO_MODE=0)"
+  LOGIN_HINT="демо-режим (кнопка «Демо-режим»); полный доступ — ./scripts/start.sh license <файл .lic>"
 }
 
 do_start() {
@@ -185,10 +182,8 @@ do_status() {
   fi
   if [ -f "$LICENSE_FILE" ]; then
     check_license_file "$LICENSE_FILE" | sed 's/^/  /' || true
-  elif [ -x "$BIN_DIR/analitics_service" ] && server_is_licensed_build; then
-    printf '  %-10s не подключена (эта сборка без лицензии не запустится)\n' "лицензия"
   else
-    printf '  %-10s не подключена — вход по токенам (%s)\n' "лицензия" "$TOKENS_FILE"
+    printf '  %-10s не подключена — дашборд в демо-режиме\n' "лицензия"
   fi
 }
 
