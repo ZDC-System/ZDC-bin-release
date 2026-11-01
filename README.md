@@ -22,13 +22,13 @@ ZDC-bin-release/
 ## Требования
 
 - Linux x86_64.
-- **glibc не старше той, на которой собран комплект** — строка `glibc:` в
-  `VERSION`. Текущая сборка сделана на Arch Linux (glibc 2.44): на Debian 12/13,
-  Ubuntu 22.04/24.04 и Alpine (musl) она не запустится (`GLIBC_2.44 not found`) —
-  для них нужен комплект, собранный под эту систему. Подходят Arch и другие
-  дистрибутивы с glibc ≥ 2.44.
+- **glibc 2.35 или новее** (строка `glibc:` в `VERSION`; комплект собран в
+  `ubuntu:22.04`): Debian 12/13, Ubuntu 22.04/24.04, Fedora, Arch. Проверено в
+  чистых Debian 12/13 и Ubuntu 22.04/24.04. Не подходят RHEL/Rocky 9 (glibc 2.34),
+  Debian 11, Ubuntu 20.04 и Alpine (musl) — сервер напишет `GLIBC_… not found`.
 - `sudo` (или root) для `setup`: пакеты и PostgreSQL. Автоустановка пакетов
-  знает семейства Arch, Debian/Ubuntu, RHEL/Fedora, Alpine.
+  знает семейства Debian/Ubuntu, Fedora, Arch. systemd не обязателен (контейнер,
+  WSL без systemd): PostgreSQL поднимается через `service`/`pg_ctlcluster`.
 - PostgreSQL 13+ и `libpq` — `setup` ставит и настраивает локальный.
 - Файл лицензии `.lic` от издателя — для полного доступа. Без него комплект
   запускается в демо-режиме (см. ниже).
@@ -37,7 +37,7 @@ ZDC-bin-release/
   `gitleaks` (поиск секретов), анализаторы `hadolint`/`tfsec`/`kube-score`/
   `semgrep`/`checkov`/`cargo-audit` (`setup` пытается поставить их сам).
 
-Windows — через WSL 2 с дистрибутивом `archlinux` (подробно — на странице
+Windows — через WSL 2 с Ubuntu (подробно — на странице
 «Установка» сайта <https://zdc-system.github.io/install.html#wsl>).
 
 ## Быстрый старт
@@ -131,7 +131,7 @@ sha256sum -c SHA256SUMS              # комплект не повреждён
 | `LLM_PROVIDER`, `LLM_MODEL` | `ollama` | нейросеть по умолчанию (меняется и в дашборде) |
 | `OLLAMA_HOST` | `http://localhost:11434` | адрес Ollama |
 | `PENTEST_HOST_PORT` | `18080` | порт цели в песочнице пентеста (занят — берётся свободный) |
-| `ZDC_SOURCE_ROOTS` | не задан | разрешённые каталоги локальных целей через `:` (`none` — запретить) |
+| `ZDC_SOURCE_ROOTS` | не задан — локальные пути запрещены | разрешённые каталоги локальных целей через `:` (`*` — любой каталог) |
 | `ZDC_WORKER_KEY` | `.zdc-data/worker.env` | свой ключ воркера (без лицензии) |
 | `DEMO_MODE` | включён | `0` — выключить демо-режим |
 | `TRUSTED_PROXIES` | — | адреса прокси, которым верить в `X-Real-IP` |

@@ -365,14 +365,22 @@ ensure_postgres_running() {
     fi
     ;;
   esac
-  # Запуск службы: systemd → service → openrc → ручной pg_ctl.
+  # Запуск службы: systemd → openrc → service → pg_ctlcluster (Debian/Ubuntu).
+  # systemctl бывает установлен и там, где systemd не запущен (контейнер, WSL без
+  # systemd): тогда он не работает — пробуем следующие способы.
   info "запускаю службу PostgreSQL"
-  if have systemctl; then
+  if have systemctl && [ -d /run/systemd/system ]; then
     as_root systemctl enable --now postgresql 2>/dev/null || as_root systemctl start postgresql || true
   elif have rc-service; then
     as_root rc-service postgresql start || true
   elif have service; then
     as_root service postgresql start || true
+  fi
+  if ! pg_running && have pg_lsclusters && have pg_ctlcluster; then
+    local ver name
+    while read -r ver name _; do
+      as_root pg_ctlcluster "$ver" "$name" start 2>/dev/null || true
+    done < <(pg_lsclusters --no-header 2>/dev/null)
   fi
   # Подождать готовности.
   local i
@@ -413,7 +421,60 @@ ensure_pg_role_db() {
     as_pg createdb -O "$role" "$db"
   else
     info "база '$db' уже есть"
+    ensure_pg_db_owner "$role" "$db"
   fi
+}
+
+# База осталась от прежней установки под другой ролью (например, `oxs` до
+# переименования): на PostgreSQL 15+ создавать таблицы в `public` может только
+# владелец базы, и сервер падает на миграциях с «permission denied for schema
+# public». Передаём роли базу, схему `public` и все объекты в ней.
+ensure_pg_db_owner() {
+  local role="$1" db="$2" owner
+  owner="$(as_pg psql -tAc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='$db'" | tr -d '[:space:]')"
+  [ -n "$owner" ] && [ "$owner" != "$role" ] || return 0
+  warn "владелец базы '$db' — '$owner', а не '$role': передаю базу и её объекты роли '$role'"
+  as_pg psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"$db\" OWNER TO \"$role\";" >/dev/null
+  # REASSIGN OWNED не годится, если прежний владелец — postgres (системные
+  # объекты), поэтому объекты схемы public передаются поимённо.
+  as_pg psql -v ON_ERROR_STOP=1 -d "$db" >/dev/null <<SQL
+ALTER SCHEMA public OWNER TO "$role";
+DO \$\$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT c.relname, c.relkind FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','S','f')
+              AND pg_get_userbyid(c.relowner) <> '$role'
+              -- последовательности колонок identity/serial переходят вместе с таблицей
+              AND NOT (c.relkind = 'S' AND EXISTS (SELECT 1 FROM pg_depend d
+                       WHERE d.objid = c.oid AND d.deptype IN ('a','i')))
+  LOOP
+    EXECUTE format('ALTER %s public.%I OWNER TO %I',
+      CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                     WHEN 'S' THEN 'SEQUENCE' WHEN 'f' THEN 'FOREIGN TABLE'
+                     ELSE 'TABLE' END,
+      r.relname, '$role');
+  END LOOP;
+  FOR r IN SELECT p.oid::regprocedure AS sig, p.prokind FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND pg_get_userbyid(p.proowner) <> '$role'
+  LOOP
+    EXECUTE format('ALTER %s %s OWNER TO %I',
+      CASE r.prokind WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' ELSE 'FUNCTION' END,
+      r.sig, '$role');
+  END LOOP;
+  FOR r IN SELECT t.typname FROM pg_type t
+             JOIN pg_namespace n ON n.oid = t.typnamespace
+            WHERE n.nspname = 'public' AND t.typtype IN ('e','d','c')
+              AND pg_get_userbyid(t.typowner) <> '$role'
+              AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind <> 'c')
+  LOOP
+    EXECUTE format('ALTER TYPE public.%I OWNER TO %I', r.typname, '$role');
+  END LOOP;
+END
+\$\$;
+SQL
 }
 
 # --- Генерация значений -------------------------------------------------------
